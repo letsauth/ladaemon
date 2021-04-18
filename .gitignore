@@ -1,4 +1,8 @@
-# This file doubles as .gitignore and .dockerignore
+.*
+!.gitignore
+!.github
+
+!.dockerignore
 
 # Version control
 .git
