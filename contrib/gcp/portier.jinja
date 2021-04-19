@@ -1,0 +1,294 @@
+resources:
+
+- name: {{ env["deployment"] }}-typeprovider-sourcerepo
+  type: deploymentmanager.v2beta.typeProvider
+  properties:
+    descriptorUrl: https://sourcerepo.googleapis.com/$discovery/rest?version=v1
+    options:
+      inputMappings:
+      - fieldName: Authorization
+        location: HEADER
+        value: >
+          $.concat("Bearer ", $.googleOauth2AccessToken())
+
+- name: {{ env["deployment"] }}-typeprovider-cloudbuild
+  type: deploymentmanager.v2beta.typeProvider
+  properties:
+    descriptorUrl: https://cloudbuild.googleapis.com/$discovery/rest?version=v1
+    options:
+      inputMappings:
+      - fieldName: Authorization
+        location: HEADER
+        value: >
+          $.concat("Bearer ", $.googleOauth2AccessToken())
+
+{# https://gist.github.com/dinvlad/fcf72039c403bc2bf46663fb43c62a57 #}
+- name: {{ env["deployment"] }}-typeprovider-run
+  type: deploymentmanager.v2beta.typeProvider
+  properties:
+    descriptorUrl: https://run.googleapis.com/$discovery/rest?version=v1
+    options:
+      inputMappings:
+      - fieldName: Authorization
+        location: HEADER
+        value: >
+          $.concat("Bearer ", $.googleOauth2AccessToken())
+
+{# https://stackoverflow.com/questions/66429971/how-to-create-a-network-endpoint-group-via-gcp-deployment-manager #}
+- name: {{ env["deployment"] }}-typeprovider-nsg
+  type: deploymentmanager.v2beta.typeProvider
+  properties:
+    descriptorUrl: https://www.googleapis.com/discovery/v1/apis/compute/v1/rest
+    options:
+      inputMappings:
+      - fieldName: Authorization
+        location: HEADER
+        value: >
+          $.concat("Bearer ", $.googleOauth2AccessToken())
+
+- name: {{ env["deployment"] }}-typeprovider-vpcaccess
+  type: deploymentmanager.v2beta.typeProvider
+  properties:
+    descriptorUrl: https://vpcaccess.googleapis.com/$discovery/rest?version=v1
+    options:
+      inputMappings:
+      - fieldName: Authorization
+        location: HEADER
+        value: >
+          $.concat("Bearer ", $.googleOauth2AccessToken())
+
+- name: {{ env["deployment"] }}-sourcerepo
+  type: {{ env["project"] }}/{{ env["deployment"] }}-typeprovider-sourcerepo:projects.repos
+  metadata:
+    dependsOn:
+    - {{ env["deployment"] }}-typeprovider-sourcerepo
+  properties:
+    parent: projects/{{ env["project"] }}
+    name: projects/{{ env["project"] }}/repos/{{ env["deployment"] }}
+
+- name: {{ env["deployment"] }}-cloudbuild-trigger
+  type: {{ env["project"] }}/{{ env["deployment"] }}-typeprovider-cloudbuild:projects.triggers
+  metadata:
+    dependsOn:
+    - {{ env["deployment"] }}-typeprovider-cloudbuild
+    - {{ env["deployment"] }}-sourcerepo
+  properties:
+    projectId: {{ env["project"] }}
+    name: {{ env["deployment"] }}
+    triggerTemplate:
+      projectId: {{ env["project"] }}
+      repoName: {{ env["deployment"] }}
+      tagName: ^prod$
+    build:
+      images:
+      - gcr.io/{{ env["project"] }}/$REPO_NAME:$TAG_NAME
+      steps:
+      - name: gcr.io/cloud-builders/docker
+        args:
+        - build
+        - -t
+        - gcr.io/{{ env["project"] }}/$REPO_NAME:$TAG_NAME
+{%- if "data_url" in properties %}
+        - --build-arg=data=url
+        - --build-arg=data_url={{ properties["data_url"] }}
+{%- endif %}
+        - .
+      timeout: 3600s
+
+{% for region in properties["regions"] if not 'ignore' in region|lower -%}
+- name: {{ env["deployment"] }}-{{ region }}-redis
+  type: gcp-types/redis-v1:projects.locations.instances
+  properties:
+    parent: projects/{{ env["project"] }}/locations/{{ region }}
+    instanceId: {{ env["deployment"] }}
+    tier: BASIC
+    redisVersion: REDIS_5_0
+    memorySizeGb: 1
+    authEnabled: true
+
+- name: {{ env["deployment"] }}-{{ region }}-redis-authstring
+  type: gcp-types/redis-v1:redis.projects.locations.instances.getAuthString
+  properties:
+    name: $(ref.{{ env["deployment"] }}-{{ region }}-redis.name)
+
+- name: {{ env["deployment"] }}-{{ region }}-connector
+  type: {{ env["project"] }}/{{ env["deployment"] }}-typeprovider-vpcaccess:projects.locations.connectors
+  metadata:
+    dependsOn:
+    - {{ env["deployment"] }}-typeprovider-vpcaccess
+  properties:
+    parent: projects/{{ env["project"] }}/locations/{{ region }}
+    network: default
+    connectorId: {{ env["deployment"] }}
+    ipCidrRange: 10.8.{{ loop.index0 }}.0/28
+    minThroughput: 200
+    maxThroughput: 300
+
+- name: {{ env["deployment"] }}-{{ region }}-run
+  type: {{ env["project"] }}/{{ env["deployment"] }}-typeprovider-run:projects.locations.services
+  metadata:
+    dependsOn:
+    - {{ env["deployment"] }}-typeprovider-run
+  properties:
+    parent: projects/{{ env["project"] }}/locations/{{ region }}
+    kind: Service
+    apiVersion: serving.knative.dev/v1
+    metadata:
+      namespace: {{ env["project"] }}
+      name: {{ env["deployment"] }}
+      annotations:
+        run.googleapis.com/ingress: internal-and-cloud-load-balancing
+        run.googleapis.com/ingress-status: internal-and-cloud-load-balancing
+    spec:
+      template:
+        metadata:
+          name: {{ env["deployment"] }}-0000
+          annotations:
+            run.googleapis.com/vpc-access-egress: private-ranges-only
+            run.googleapis.com/vpc-access-connector: $(ref.{{ env["deployment"] }}-{{ region }}-connector.name)
+            autoscaling.knative.dev/minScale: '0'
+            autoscaling.knative.dev/maxScale: '10'
+        spec:
+          timeoutSeconds: 30
+          containers:
+          - image: gcr.io/{{ env["project"] }}/{{ env["deployment"] }}:prod
+            ports:
+            - name: http1
+              containerPort: 3333
+            env:
+            - name: BROKER_PUBLIC_URL
+              value: https://{{ properties["hostname"] }}
+{%- if "allowed_origins" in properties %}
+            - name: BROKER_ALLOWED_ORIGINS
+              value: >
+                {{ properties["allowed_origins"]|join(',') }}
+{%- endif %}
+            - name: BROKER_TRUSTED_PROXIES
+{# https://cloud.google.com/load-balancing/docs/https#source_ip_addresses_for_client_packets #}
+{% set trusted_proxies = [ "35.191.0.0/16", "130.211.0.0/22" ] %}
+{% for version in [ 4, 6 ] %}
+{%   set trusted_proxies = trusted_proxies.append("$(ref." ~ env["deployment"] ~ "-globaladdress-ipv" ~ version ~ ".address)") %}
+{% endfor %}
+              value: >
+                {{ trusted_proxies|join(',') }}
+            - name: BROKER_REDIS_URL
+              {# hardcoded port, see issue details in README #}
+              value: |
+                redis://:$(ref.{{ env["deployment"] }}-{{ region }}-redis-authstring.authString)@$(ref.{{ env["deployment"] }}-{{ region }}-redis.host):6379/0
+            - name: BROKER_FROM_NAME
+              value: {{ properties["from_name"] }}
+            - name: BROKER_FROM_ADDRESS
+              value: {{ properties["from_address"] }}
+            - name: BROKER_SMTP_SERVER
+              value: {{ properties["smtp_hostname"] }}:{{ properties["smtp_port"] }}
+            - name: BROKER_SMTP_USERNAME
+              value: |
+                {{ properties["smtp_username"] }}
+            - name: BROKER_SMTP_PASSWORD
+              value: |
+                {{ properties["smtp_password"] }}
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 128Mi
+
+- name: {{ env["deployment"] }}-{{ region }}-run-iam
+  type: {{ env["project"] }}/{{ env["deployment"] }}-typeprovider-run:run.projects.locations.services.setIamPolicy
+  metadata:
+    dependsOn:
+    - {{ env["deployment"] }}-typeprovider-run
+    - {{ env["deployment"] }}-{{ region }}-run
+  properties:
+    resource: projects/{{ env["project"] }}/locations/{{ region }}/services/{{ env["deployment"] }}
+    policy:
+      bindings:
+      - members:
+        - allUsers
+        role: roles/run.invoker
+
+- name: {{ env["deployment"] }}-{{ region }}-nsg
+  type: {{ env["project"] }}/{{ env["deployment"] }}-typeprovider-nsg:regionNetworkEndpointGroups
+  metadata:
+    dependsOn:
+    - {{ env["deployment"] }}-typeprovider-nsg
+  properties:
+    project: {{ env["project"] }}
+    region: {{ region }}
+    name: {{ env["deployment"] }}
+    networkEndpointType: SERVERLESS
+    cloudRun:
+      service: $(ref.{{ env["deployment"] }}-{{ region }}-run.metadata.name)
+{%- endfor %}
+
+- name: {{ env["deployment"] }}-backendservice
+  type: compute.v1.backendService
+  properties:
+    backends:
+{%- for region in properties["regions"] if not 'ignore' in region|lower %}
+    - group: $(ref.{{ env["deployment"] }}-{{ region }}-nsg.selfLink)
+{%- endfor %}
+
+- name: {{ env["deployment"] }}-urlmap
+  type: compute.v1.urlMap
+  properties:
+    # redirect to mitigate against skiddies burning a hole in your bank account
+    defaultUrlRedirect:
+      hostRedirect: {{ properties["website_hostname"] }}
+      httpsRedirect: true
+      pathRedirect: {{ properties["website_path"] }}
+      redirectResponseCode: SEE_OTHER
+      stripQuery: true
+    hostRules:
+    - hosts:
+      - {{ properties["hostname"] }}
+      pathMatcher: main
+    pathMatchers:
+    - name: main
+      defaultUrlRedirect:
+        hostRedirect: {{ properties["website_hostname"] }}
+        httpsRedirect: true
+        pathRedirect: {{ properties["website_path"] }}
+        redirectResponseCode: SEE_OTHER
+        stripQuery: true
+      # portier-broker:src/router.rs
+      pathRules:
+      - paths:
+        - /.well-known/openid-configuration
+        - /keys.json
+        - /auth
+        - /normalize
+        - /callback
+        - /confirm
+        - /ver.txt
+        service: $(ref.{{ env["deployment"] }}-backendservice.selfLink)
+
+- name: {{ env["deployment"] }}-sslcertificate
+  type: compute.v1.sslCertificate
+  properties:
+    type: MANAGED
+    managed:
+      domains:
+      - {{ properties["hostname"] }}
+
+- name: {{ env["deployment"] }}-targethttpsproxy
+  type: compute.v1.targetHttpsProxy
+  properties:
+    urlMap: $(ref.{{ env["deployment"] }}-urlmap.selfLink)
+    sslCertificates:
+    - $(ref.{{ env["deployment"] }}-sslcertificate.selfLink)
+
+{% for version in [ 4, 6 ] %}
+- name: {{ env["deployment"] }}-globaladdress-ipv{{ version }}
+  type: compute.v1.globalAddress
+  properties:
+    networkTier: PREMIUM
+    ipVersion: IPV{{ version }}
+
+- name: {{ env["deployment"] }}-globalforwardingrule-ipv{{ version }}
+  type: compute.v1.globalForwardingRule
+  properties:
+    loadBalancingScheme: EXTERNAL
+    IPAddress: $(ref.{{ env["deployment"] }}-globaladdress-ipv{{ version }}.address)
+    portRange: 443-443
+    target: $(ref.{{ env["deployment"] }}-targethttpsproxy.selfLink)
+{% endfor %}
