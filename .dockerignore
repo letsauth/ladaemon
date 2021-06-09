@@ -1,1 +1,10 @@
-.gitignore
+**/.*
+Dockerfile
+
+*
+!Cargo.*
+!clippy.*
+!src
+!lang
+!res
+!tmpl

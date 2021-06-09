@@ -1,0 +1,79 @@
+info:
+  title: Portier Broker Service
+  author: https://github.com/portier
+
+required:
+- regions
+- website_hostname
+- hostname
+- from_address
+- smtp_hostname
+- smtp_username
+- smtp_password
+
+properties:
+  regions:
+    type: array
+    description: >
+      List of regions (https://cloud.google.com/run/docs/locations) to deploy the Cloud Run component.
+      Important note, once deployed you must not change the *ordering* as it is used to select IP ranges that once set are immutable, if you need to disable a region update the entry to include the string 'ignore' which is case insensitively matched on by the deployment template
+    uniqueItems: true
+    minContains: 1
+
+  data_url:
+    type: string
+    description: >
+      URL to .tar.gz to provide custom {lang,res,tmpl} contents, see Dockerfile for details
+
+  website_hostname:
+    type: string
+    description: >
+      Organisation website hostname we redirect unknown requests to
+
+  website_path:
+    type: string
+    description: >
+      Organisation website path we redirect unknown requests to
+    default: /
+
+  hostname:
+    type: string
+    description: >
+      Constructs a value for config.toml:public_url using the template 'http://[hostname]'
+
+  allowed_origins:
+    type: array
+    description: >
+      Used to construct config.toml:allowed_origins
+
+  from_name:
+    type: string
+    description: >
+      Used to populate config.toml:from_name
+    default: Portier
+
+  from_address:
+    type: string
+    description: >
+      Used to populate config.toml:from_address
+
+  smtp_hostname:
+    type: string
+    description: >
+      Hostname for SMTP server
+
+  smtp_port:
+    type: integer
+    description: >
+      Port for SMTP server
+    default: 587
+
+  smtp_username:
+    type: string
+    description: >
+      Username for SMTP server
+
+  smtp_password:
+    type: string
+    description: >
+      Password for SMTP server
