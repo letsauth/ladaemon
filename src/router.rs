@@ -10,6 +10,7 @@ pub async fn router(ctx: &mut Context) -> HandlerResult {
         (&Method::GET, "/keys.json") => handlers::auth::key_set(ctx).await,
         (&Method::GET, "/auth") | (&Method::POST, "/auth") => handlers::auth::auth(ctx).await,
         (&Method::POST, "/normalize") => handlers::normalize::normalize(ctx).await,
+        (&Method::POST, "/token") => handlers::token::token(ctx).await,
 
         // OpenID Connect endpoints
         // For providers that don't support `response_mode=form_post`, we capture the fragment

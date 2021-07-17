@@ -95,7 +95,7 @@ pub async fn auth(ctx: &mut Context, email_addr: EmailAddress) -> HandlerResult 
     }
 
     // Render a form for the user.
-    if ctx.want_json() {
+    if ctx.want_json {
         Ok(json_response(
             &json!({
                 "result": "verification_code_sent",

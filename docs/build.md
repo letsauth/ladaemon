@@ -47,6 +47,18 @@ The broker currently defines the following feature flags:
 - `rusqlite`: Enables [SQLite] storage support using the [rusqlite crate].
   (Enabled by default.)
 
+- `lettre_smtp`: Enables sending mail using SMTP, via the [lettre
+  crate]. (Enabled by default.)
+
+- `lettre_smtp`: Enables sending mail using the `sendmail` command, via the
+  [lettre crate]. (Enabled by default.)
+
+- `postmark`: Enables sending mail using the [Postmark] API. (Enabled by
+  default.)
+
+- `mailgun`: Enables sending mail using the [Mailgun] API. (Enabled by
+  default.)
+
 - `insecure`: Uses plain HTTP for WebFinger (instead of HTTPS), and allows
   Identity Providers to use plain HTTP in their discovery documents. Useful for
   testing Identity Provider implementations.
@@ -55,6 +67,9 @@ The broker currently defines the following feature flags:
 [redis crate]: https://crates.io/crates/redis
 [sqlite]: https://www.sqlite.org/index.html
 [rusqlite crate]: https://crates.io/crates/rusqlite
+[lettre crate]: https://crates.io/crates/lettre
+[postmark]: https://postmarkapp.com
+[mailgun]: https://www.mailgun.com
 
 ## Testing
 

@@ -43,6 +43,8 @@ impl Message for SaveKeys {
 pub struct RusqliteStore {
     /// TTL of session keys
     expire_sessions: Duration,
+    /// TTL of auth code keys
+    expire_auth_codes: Duration,
     /// TTL of cache keys
     expire_cache: Duration,
     /// Rate limit configuration.
@@ -59,6 +61,7 @@ impl RusqliteStore {
     pub async fn new(
         sqlite_db: PathBuf,
         expire_sessions: Duration,
+        expire_auth_codes: Duration,
         expire_cache: Duration,
         limit_configs: Vec<LimitConfig>,
         fetcher: Addr<FetchAgent>,
@@ -76,6 +79,7 @@ impl RusqliteStore {
             log::warn!("(This warning can't be fixed; it's a friendly reminder.)");
             Ok(RusqliteStore {
                 expire_sessions,
+                expire_auth_codes,
                 expire_cache,
                 limit_configs,
                 conn,
@@ -112,19 +116,22 @@ impl RusqliteStore {
     }
 
     fn verify_schema(conn: &Connection) -> Result<(), SqlError> {
-        let user_version: u32 =
-            conn.query_row("SELECT * FROM pragma_user_version()", [], |row| row.get(0))?;
-        match user_version {
-            0 => Self::init_schema(conn),
-            1 => Ok(()),
-            _ => panic!(
-                "The SQLite database has an unknown version: {}",
-                user_version
-            ),
+        loop {
+            let user_version: u32 =
+                conn.query_row("SELECT * FROM pragma_user_version()", [], |row| row.get(0))?;
+            match user_version {
+                0 => Self::init_schema_1(conn)?,
+                1 => Self::init_schema_2(conn)?,
+                2 => return Ok(()),
+                _ => panic!(
+                    "The SQLite database has an unknown version: {}",
+                    user_version
+                ),
+            }
         }
     }
 
-    fn init_schema(conn: &Connection) -> Result<(), SqlError> {
+    fn init_schema_1(conn: &Connection) -> Result<(), SqlError> {
         conn.execute_batch(
             "
             BEGIN;
@@ -156,6 +163,25 @@ impl RusqliteStore {
             );
 
             PRAGMA user_version = 1;
+            COMMIT;
+            ",
+        )?;
+        Ok(())
+    }
+
+    fn init_schema_2(conn: &Connection) -> Result<(), SqlError> {
+        conn.execute_batch(
+            "
+            BEGIN;
+
+            CREATE TABLE auth_codes (
+                code TEXT NOT NULL PRIMARY KEY,
+                data TEXT NOT NULL,
+                expires INTEGER NOT NULL
+            );
+            CREATE INDEX auth_codes_expires ON auth_codes (expires);
+
+            PRAGMA user_version = 2;
             COMMIT;
             ",
         )?;
@@ -199,6 +225,9 @@ impl Handler<Gc> for RusqliteStore {
         self.conn
             .execute("DELETE FROM sessions WHERE expires <= ?1", [now])
             .expect("session cleanup failed");
+        self.conn
+            .execute("DELETE FROM auth_codes WHERE expires <= ?1", [now])
+            .expect("auth codes cleanup failed");
         self.conn
             .execute("DELETE FROM cache_entries WHERE expires <= ?1", [now])
             .expect("cache cleanup failed");
@@ -251,6 +280,47 @@ impl Handler<DeleteSession> for RusqliteStore {
             self.conn
                 .execute("DELETE FROM sessions WHERE id = ?1", &[&message.session_id])?;
             Ok(())
+        });
+    }
+}
+
+impl Handler<SaveAuthCode> for RusqliteStore {
+    fn handle(&mut self, message: SaveAuthCode, cx: Context<Self, SaveAuthCode>) {
+        cx.reply_with(move || {
+            let expires = (unix_timestamp() + self.expire_auth_codes.as_secs()) as i64;
+            let data = serde_json::to_string(&message.data)?;
+            self.conn.execute(
+                "REPLACE INTO auth_codes (code, data, expires) VALUES (?1, ?2, ?3)",
+                params![&message.code, &data, &expires],
+            )?;
+            Ok(())
+        });
+    }
+}
+
+impl Handler<ConsumeAuthCode> for RusqliteStore {
+    fn handle(&mut self, message: ConsumeAuthCode, cx: Context<Self, ConsumeAuthCode>) {
+        cx.reply_with(move || {
+            let now = unix_timestamp() as i64;
+            let tx = self.conn.transaction()?;
+            let data: Option<String> = tx
+                .query_row(
+                    "SELECT data FROM auth_codes WHERE code = ?1 AND expires > ?2 LIMIT 1",
+                    params![&message.code, &now],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(data) = data {
+                tx.execute(
+                    "DELETE FROM auth_codes WHERE code = ?1",
+                    params![&message.code],
+                )?;
+                tx.commit()?;
+                let data = serde_json::from_str(&data)?;
+                Ok(Some(data))
+            } else {
+                Ok(None)
+            }
         });
     }
 }

@@ -40,6 +40,27 @@ pub struct Session {
     pub bridge_data: BridgeData,
 }
 
+/// Response types we support.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum ResponseType {
+    #[serde(rename = "id_token")]
+    IdToken,
+    // NOTE: This type is outside the Portier spec, but we support it in this implementation for
+    // compatibility with other OpenID Connect clients.
+    #[serde(rename = "code")]
+    Code,
+}
+
+impl ResponseType {
+    /// Get the default response mode for this response type.
+    pub fn default_response_mode(self) -> ResponseMode {
+        match self {
+            ResponseType::IdToken => ResponseMode::Fragment,
+            ResponseType::Code => ResponseMode::Query,
+        }
+    }
+}
+
 /// Response modes we support.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum ResponseMode {
@@ -47,6 +68,21 @@ pub enum ResponseMode {
     Fragment,
     #[serde(rename = "form_post")]
     FormPost,
+    // NOTE: This mode is outside the Portier spec, but we support it in this implementation for
+    // compatibility with other OpenID Connect clients.
+    #[serde(rename = "query")]
+    Query,
+}
+
+impl ResponseMode {
+    /// Return the querystring value for this response mode.
+    pub fn as_str(&self) -> &str {
+        match self {
+            ResponseMode::Fragment => "fragment",
+            ResponseMode::FormPost => "form_post",
+            ResponseMode::Query => "query",
+        }
+    }
 }
 
 /// Parameters used to return to the relying party
@@ -65,6 +101,7 @@ pub struct SessionData {
     pub return_params: ReturnParams,
     pub email: String,
     pub email_addr: EmailAddress,
+    pub response_type: ResponseType,
     pub nonce: String,
     pub signing_alg: SigningAlgorithm,
 }
@@ -91,6 +128,8 @@ pub struct Context {
     pub catalog_idx: usize,
     /// Parameters used to return to the relying party
     pub return_params: Option<ReturnParams>,
+    /// Whether the response should contain a JSON body
+    pub want_json: bool,
 }
 
 impl Context {
@@ -111,19 +150,13 @@ impl Context {
         parse_form_encoded(&self.body)
     }
 
-    /// Whether this request wants a JSON response.
-    pub fn want_json(&self) -> bool {
-        self.headers
-            .get(hyper::header::ACCEPT)
-            .map_or(false, |accept| accept == "application/json")
-    }
-
     /// Start a session by filling out the common part.
     pub async fn start_session(
         &mut self,
         client_id: &str,
         email: &str,
         email_addr: &EmailAddress,
+        response_type: ResponseType,
         nonce: &str,
         signing_alg: SigningAlgorithm,
         ip: IpAddr,
@@ -140,6 +173,7 @@ impl Context {
             return_params: return_params.clone(),
             email: email.to_owned(),
             email_addr: email_addr.clone(),
+            response_type,
             nonce: nonce.to_owned(),
             signing_alg,
         });
@@ -244,6 +278,10 @@ impl Service {
         }
 
         // Create the request context.
+        let want_json = parts
+            .headers
+            .get(hyper::header::ACCEPT)
+            .map_or(false, |accept| accept == "application/json");
         let mut ctx = Context {
             app,
             ip,
@@ -255,6 +293,7 @@ impl Service {
             session_data: None,
             catalog_idx,
             return_params: None,
+            want_json,
         };
 
         // Call the route handler.
@@ -323,7 +362,7 @@ impl HyperService<Request> for Service {
 async fn handle_error(ctx: &Context, err: BrokerError) -> Response {
     let reference = err.log(Some(&ctx.app.rng)).await;
 
-    if ctx.want_json() {
+    if ctx.want_json {
         let mut res = json_response(
             &json!({
                 "error": err.oauth_error_code(),
@@ -514,6 +553,15 @@ pub fn return_to_relier(ctx: &Context, params: &[(&str, &str)]) -> Response {
 
             html_response(ctx.app.templates.forward.render_data(&data))
         }
+        // Add params as query parameters and redirect.
+        ResponseMode::Query => {
+            let mut redirect_uri = redirect_uri.clone();
+            redirect_uri.query_pairs_mut().extend_pairs(params).finish();
+
+            let mut res = empty_response(StatusCode::SEE_OTHER);
+            res.header(hyper::header::LOCATION, String::from(redirect_uri));
+            res
+        }
     }
 }
 
@@ -522,7 +570,7 @@ pub fn return_to_relier(ctx: &Context, params: &[(&str, &str)]) -> Response {
 /// Serializes the argument value to JSON and returns a HTTP 200 response
 /// code with the serialized JSON as the body.
 pub fn json_response(obj: &serde_json::Value, max_age: Option<Duration>) -> Response {
-    let body = serde_json::to_string(&obj).expect("unable to coerce JSON Value into string");
+    let body = serde_json::to_string_pretty(&obj).expect("unable to coerce JSON Value into string");
     let mut res = Response::new(Body::from(body));
     res.typed_header(ContentType::json());
     if let Some(max_age) = max_age {

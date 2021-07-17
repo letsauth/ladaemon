@@ -3,7 +3,7 @@ use crate::config::LimitInput;
 use crate::crypto::SigningAlgorithm;
 use crate::utils::agent::{Addr, Message, Sender};
 use crate::utils::BoxError;
-use crate::web::Session;
+use crate::web::{Session, SessionData};
 use prometheus::Histogram;
 use std::collections::HashSet;
 use url::Url;
@@ -35,6 +35,26 @@ pub struct DeleteSession {
 }
 impl Message for DeleteSession {
     type Reply = Result<(), BoxError>;
+}
+
+/// Message requesting an authorization code by saved.
+pub struct SaveAuthCode {
+    /// The authorization code.
+    pub code: String,
+    /// Session data to save.
+    pub data: SessionData,
+}
+impl Message for SaveAuthCode {
+    type Reply = Result<(), BoxError>;
+}
+
+/// Message requesting an authorization code be retrieved and deleted.
+pub struct ConsumeAuthCode {
+    /// The authorization code.
+    pub code: String,
+}
+impl Message for ConsumeAuthCode {
+    type Reply = Result<Option<SessionData>, BoxError>;
 }
 
 /// Message requesting a URL be fetched, possibly from cache.
@@ -115,6 +135,8 @@ pub trait StoreSender:
     Sender<SaveSession>
     + Sender<GetSession>
     + Sender<DeleteSession>
+    + Sender<SaveAuthCode>
+    + Sender<ConsumeAuthCode>
     + Sender<FetchUrlCached>
     + Sender<IncrAndTestLimits>
     + Sender<DecrLimits>

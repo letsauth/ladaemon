@@ -6,6 +6,7 @@
     clippy::enum_glob_use,
     clippy::module_name_repetitions,
     clippy::single_match_else,
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     clippy::wildcard_imports
 )]

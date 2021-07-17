@@ -30,6 +30,7 @@ pub struct TomlConfig {
     keys_ttl: Option<u64>,
     token_ttl: Option<u64>,
     session_ttl: Option<u64>,
+    auth_code_ttl: Option<u64>,
     cache_ttl: Option<u64>,
 
     keyfiles: Option<Vec<PathBuf>>,
@@ -306,6 +307,9 @@ impl TomlConfig {
         }
         if let Some(val) = parsed.session_ttl {
             builder.session_ttl = Duration::from_secs(val);
+        }
+        if let Some(val) = parsed.auth_code_ttl {
+            builder.auth_code_ttl = Duration::from_secs(val);
         }
         if let Some(val) = parsed.cache_ttl {
             builder.cache_ttl = Duration::from_secs(val);

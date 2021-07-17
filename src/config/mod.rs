@@ -90,6 +90,7 @@ pub struct Config {
 /// Parameters for `StoreConfig::spawn_store`.
 struct StoreParams {
     session_ttl: Duration,
+    auth_code_ttl: Duration,
     cache_ttl: Duration,
     limit_configs: Vec<LimitConfig>,
     fetcher: Addr<FetchAgent>,
@@ -144,6 +145,7 @@ impl StoreConfig {
                 let store = agents::RedisStore::new(
                     redis_url,
                     params.session_ttl,
+                    params.auth_code_ttl,
                     params.cache_ttl,
                     params.limit_configs,
                     params.fetcher,
@@ -158,6 +160,7 @@ impl StoreConfig {
                 let store = agents::RusqliteStore::new(
                     sqlite_db,
                     params.session_ttl,
+                    params.auth_code_ttl,
                     params.cache_ttl,
                     params.limit_configs,
                     params.fetcher,
@@ -169,6 +172,7 @@ impl StoreConfig {
             StoreConfig::Memory => {
                 let store = agents::MemoryStore::new(
                     params.session_ttl,
+                    params.auth_code_ttl,
                     params.cache_ttl,
                     params.limit_configs,
                     params.fetcher,
@@ -347,6 +351,7 @@ pub struct ConfigBuilder {
     pub keys_ttl: Duration,
     pub token_ttl: Duration,
     pub session_ttl: Duration,
+    pub auth_code_ttl: Duration,
     pub cache_ttl: Duration,
 
     pub keyfiles: Vec<PathBuf>,
@@ -399,6 +404,7 @@ impl ConfigBuilder {
             keys_ttl: Duration::from_secs(86_400),
             token_ttl: Duration::from_secs(600),
             session_ttl: Duration::from_secs(900),
+            auth_code_ttl: Duration::from_secs(600),
             cache_ttl: Duration::from_secs(3600),
 
             keyfiles: Vec::new(),
@@ -515,6 +521,7 @@ impl ConfigBuilder {
         let store = store_config
             .spawn_store(StoreParams {
                 session_ttl: self.session_ttl,
+                auth_code_ttl: self.auth_code_ttl,
                 cache_ttl: self.cache_ttl,
                 limit_configs: self.limits,
                 fetcher: fetcher.clone(),
@@ -616,6 +623,7 @@ impl ConfigBuilder {
         let store = store_config
             .spawn_store(StoreParams {
                 session_ttl: self.session_ttl,
+                auth_code_ttl: self.auth_code_ttl,
                 cache_ttl: self.cache_ttl,
                 limit_configs: self.limits,
                 fetcher,

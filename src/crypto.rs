@@ -229,8 +229,10 @@ pub fn verify_jws(
 
 /// Helper method to create a JWT for a given email address and audience.
 ///
-/// Builds the JSON payload, then signs it using the last key provided in
-/// the configuration object.
+/// Builds the JSON payload, then signs it using the last key provided in the configuration object.
+///
+/// Currently, the only possible failure here is that we accepted a signing algorithm from the RP
+/// that suddenly disappeared from our config. The caller may treat this as an internal error.
 pub async fn create_jwt(
     app: &Config,
     email: &str,

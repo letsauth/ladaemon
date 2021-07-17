@@ -36,7 +36,7 @@ const main = async () => {
       httpMailer.destroy();
     }
     if (relyingParty) {
-      relyingParty.destroy!();
+      relyingParty.destroy();
     }
     if (broker) {
       broker.destroy();

@@ -241,6 +241,8 @@ keys_ttl = 86400 # 1 day
 token_ttl = 600 # 10 minutes
 # Time that users have to complete authentication
 session_ttl = 900 # 15 minutes
+# Time that relying parties have to redeem an authorization code
+auth_code_ttl = 600 # 10 minutes
 # Minimum cache time for downstream HTTP requests made by the broker
 cache_ttl = 3600 # 1 hour
 

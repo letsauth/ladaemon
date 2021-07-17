@@ -105,6 +105,8 @@ jobs:
 
     - name: Package
       run: |
+        rm docs/build.md  # Not useful for binaries
+
         mkdir release-packages
         for target in $build_targets; do
           broker_executable="./target/$target/release/portier-broker"
@@ -180,7 +182,8 @@ jobs:
 
     - name: Package
       run: |
-        rm -fr docs/systemd  # Linux-specific
+        rm docs/build.md  # Not useful for binaries
+        rm -r docs/systemd  # Linux-specific
 
         mkdir release-packages
 
@@ -244,7 +247,8 @@ jobs:
 
     - name: Package
       run: |
-        rm -fr docs/systemd  # Linux-specific
+        rm docs/build.md  # Not useful for binaries
+        rm -r docs/systemd  # Linux-specific
 
         mkdir release-packages
         for target in $build_targets; do

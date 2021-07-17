@@ -1,6 +1,9 @@
 import express from "express";
-import bodyParser from "body-parser";
 import { Mailbox } from "./mailbox";
+import {
+  json as createJsonParser,
+  urlencoded as createFormParser,
+} from "body-parser";
 
 export interface HttpMailerRequest {
   headers: { [key: string]: string | string[] | undefined };
@@ -13,8 +16,8 @@ export interface HttpMailer {
   getRequests(): HttpMailerRequest[];
 }
 
-const jsonParser = bodyParser.json();
-const formParser = bodyParser.urlencoded({ extended: false });
+const jsonParser = createJsonParser();
+const formParser = createFormParser({ extended: false });
 
 export default ({ mailbox }: { mailbox: Mailbox }): HttpMailer => {
   const app = express();

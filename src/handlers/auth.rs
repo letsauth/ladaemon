@@ -5,7 +5,9 @@ use crate::email_address::EmailAddress;
 use crate::error::BrokerError;
 use crate::utils::DomainValidationError;
 use crate::validation::parse_redirect_uri;
-use crate::web::{html_response, json_response, Context, HandlerResult, ReturnParams};
+use crate::web::{
+    html_response, json_response, Context, HandlerResult, ResponseType, ReturnParams,
+};
 use crate::webfinger::{self, Relation};
 use crate::{bridges, metrics};
 use http::Method;
@@ -22,12 +24,14 @@ pub async fn discovery(ctx: &mut Context) -> HandlerResult {
     let obj = json!({
         "issuer": ctx.app.public_url,
         "authorization_endpoint": format!("{}/auth", ctx.app.public_url),
+        "token_endpoint": format!("{}/token", ctx.app.public_url),
+        "token_endpoint_auth_methods_supported": ["client_secret_basic"],
         "jwks_uri": format!("{}/keys.json", ctx.app.public_url),
         "scopes_supported": vec!["openid", "email"],
         "claims_supported": vec!["iss", "aud", "exp", "iat", "email"],
-        "response_types_supported": vec!["id_token"],
-        "response_modes_supported": vec!["form_post", "fragment"],
-        "grant_types_supported": vec!["implicit"],
+        "response_types_supported": vec!["id_token", "code"],
+        "response_modes_supported": vec!["form_post", "fragment", "query"],
+        "grant_types_supported": vec!["implicit", "authorization_code"],
         "subject_types_supported": vec!["public"],
         "id_token_signing_alg_values_supported": &ctx.app.signing_algs,
         // NOTE: This field is non-standard.
@@ -65,9 +69,26 @@ pub async fn auth(ctx: &mut Context) -> HandlerResult {
 
     let redirect_uri = try_get_input_param!(params, "redirect_uri");
     let client_id = try_get_input_param!(params, "client_id");
-    let response_mode = try_get_input_param!(params, "response_mode", "fragment".to_owned());
+    let response_type = try_get_input_param!(params, "response_type");
     let response_errors = try_get_input_param!(params, "response_errors", "true".to_owned());
     let state = try_get_input_param!(params, "state", "".to_owned());
+
+    // Parse response_type and response_mode by wrapping them in a JSON Value.
+    // This has minimal overhead, and saves us a separate implementation.
+    let response_type: ResponseType = from_value(Value::String(response_type)).map_err(|_err| {
+        BrokerError::Input("unsupported response_type, must be id_token or code".to_owned())
+    })?;
+
+    let response_mode = try_get_input_param!(
+        params,
+        "response_mode",
+        response_type.default_response_mode().as_str().to_owned()
+    );
+    let response_mode = from_value(Value::String(response_mode)).map_err(|_err| {
+        BrokerError::Input(
+            "unsupported response_mode, must be fragment, form_post or query".to_owned(),
+        )
+    })?;
 
     let redirect_uri = parse_redirect_uri(&redirect_uri, "redirect_uri")
         .map_err(|e| BrokerError::Input(format!("{}", e)))?;
@@ -77,12 +98,6 @@ pub async fn auth(ctx: &mut Context) -> HandlerResult {
             "the client_id must be the origin of the redirect_uri".to_owned(),
         ));
     }
-
-    // Parse response_mode by wrapping it a JSON Value.
-    // This has minimal overhead, and saves us a separate implementation.
-    let response_mode = from_value(Value::String(response_mode)).map_err(|_err| {
-        BrokerError::Input("unsupported response_mode, must be fragment or form_post".to_owned())
-    })?;
 
     // NOTE: This query parameter is non-standard.
     let response_errors = response_errors
@@ -108,18 +123,12 @@ pub async fn auth(ctx: &mut Context) -> HandlerResult {
     }
 
     let nonce = try_get_input_param!(params, "nonce");
-    if try_get_input_param!(params, "response_type") != "id_token" {
-        return Err(BrokerError::Input(
-            "unsupported response_type, only id_token is supported".to_owned(),
-        ));
-    }
 
     let scope = try_get_input_param!(params, "scope");
     let mut scope_set: HashSet<&str> = scope.split(' ').collect();
-    scope_set.remove("email");
-    if !scope_set.remove("openid") || !scope_set.is_empty() {
+    if !scope_set.remove("openid") {
         return Err(BrokerError::Input(
-            "unsupported scope, must contain 'openid' and optionally 'email'".to_owned(),
+            "unsupported scope, must contain 'openid'".to_owned(),
         ));
     }
 
@@ -137,7 +146,7 @@ pub async fn auth(ctx: &mut Context) -> HandlerResult {
         })?;
 
     let login_hint = try_get_input_param!(params, "login_hint", "".to_string());
-    if login_hint.is_empty() && !ctx.want_json() {
+    if login_hint.is_empty() && !ctx.want_json {
         let display_origin = redirect_uri_.origin().unicode_serialization();
 
         let catalog = ctx.catalog();
@@ -219,6 +228,7 @@ pub async fn auth(ctx: &mut Context) -> HandlerResult {
         &client_id,
         &login_hint,
         &email_addr,
+        response_type,
         &nonce,
         signing_alg,
         ctx.ip,

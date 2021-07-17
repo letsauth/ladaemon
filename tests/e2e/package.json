@@ -23,7 +23,7 @@
     "portier": "^0.4.2",
     "selenium-webdriver": "^4.0.0-beta.1",
     "smtp-server": "^3.6.0",
-    "ts-node": "^9.1.1",
+    "ts-node": "^10.1.0",
     "typescript": "^4.2.3"
   }
 }

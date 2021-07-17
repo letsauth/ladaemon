@@ -49,6 +49,8 @@ pub struct RedisStore {
     locking: locking::LockClient,
     /// TTL of session keys
     expire_sessions: Duration,
+    /// TTL of auth code keys
+    expire_auth_codes: Duration,
     /// TTL of cache keys
     expire_cache: Duration,
     /// The agent used for fetching on cache miss.
@@ -67,6 +69,7 @@ impl RedisStore {
     pub async fn new(
         mut url: String,
         expire_sessions: Duration,
+        expire_auth_codes: Duration,
         expire_cache: Duration,
         limit_configs: Vec<LimitConfig>,
         fetcher: Addr<FetchAgent>,
@@ -114,6 +117,7 @@ impl RedisStore {
             pubsub,
             locking,
             expire_sessions,
+            expire_auth_codes,
             expire_cache,
             fetcher,
             key_manager: None,
@@ -125,6 +129,10 @@ impl RedisStore {
 
     fn format_session_key(session_id: &str) -> String {
         format!("session:{}", session_id)
+    }
+
+    fn format_auth_code_key(code: &str) -> String {
+        format!("auth_code:{}", code)
     }
 }
 
@@ -183,6 +191,40 @@ impl Handler<DeleteSession> for RedisStore {
             let key = Self::format_session_key(&message.session_id);
             conn.del(&key).await?;
             Ok(())
+        });
+    }
+}
+
+impl Handler<SaveAuthCode> for RedisStore {
+    fn handle(&mut self, message: SaveAuthCode, cx: Context<Self, SaveAuthCode>) {
+        let mut conn = self.conn.clone();
+        let ttl = self.expire_auth_codes;
+        cx.reply_later(async move {
+            let key = Self::format_auth_code_key(&message.code);
+            let data = serde_json::to_string(&message.data)?;
+            conn.set_ex(&key, data, ttl.as_secs() as usize).await?;
+            Ok(())
+        });
+    }
+}
+
+impl Handler<ConsumeAuthCode> for RedisStore {
+    fn handle(&mut self, message: ConsumeAuthCode, cx: Context<Self, ConsumeAuthCode>) {
+        let mut conn = self.conn.clone();
+        cx.reply_later(async move {
+            let key = Self::format_auth_code_key(&message.code);
+            let data: (Option<String>,) = pipe()
+                .atomic()
+                .get(&key)
+                .del(&key)
+                .ignore()
+                .query_async(&mut conn)
+                .await?;
+            if let (Some(data),) = data {
+                Ok(Some(serde_json::from_str(&data)?))
+            } else {
+                Ok(None)
+            }
         });
     }
 }

@@ -2,7 +2,7 @@ use crate::agents::*;
 use crate::config::LimitConfig;
 use crate::crypto::SigningAlgorithm;
 use crate::utils::agent::*;
-use crate::web::Session;
+use crate::web::{Session, SessionData};
 use std::collections::hash_map::{Entry, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,6 +52,8 @@ type KeysSlot = Arc<Mutex<KeySet>>;
 pub struct MemoryStore {
     /// TTL of session keys
     expire_sessions: Duration,
+    /// TTL of auth code keys
+    expire_auth_codes: Duration,
     /// TTL of cache keys
     expire_cache: Duration,
     /// Rate limit configuration.
@@ -62,6 +64,8 @@ pub struct MemoryStore {
     key_manager: Option<Addr<RotatingKeys>>,
     /// Session storage.
     sessions: HashMap<String, Expiring<Session>>,
+    /// Auth code storage.
+    auth_codes: HashMap<String, Expiring<SessionData>>,
     /// Cache storage.
     cache: HashMap<Url, CacheSlot>,
     /// Rate limit storage.
@@ -73,6 +77,7 @@ pub struct MemoryStore {
 impl MemoryStore {
     pub fn new(
         expire_sessions: Duration,
+        expire_auth_codes: Duration,
         expire_cache: Duration,
         limit_configs: Vec<LimitConfig>,
         fetcher: Addr<FetchAgent>,
@@ -82,11 +87,13 @@ impl MemoryStore {
 
         MemoryStore {
             expire_sessions,
+            expire_auth_codes,
             expire_cache,
             limit_configs,
             fetcher,
             key_manager: None,
             sessions: HashMap::new(),
+            auth_codes: HashMap::new(),
             cache: HashMap::new(),
             limits: HashMap::new(),
             keys: HashMap::new(),
@@ -115,6 +122,11 @@ impl Handler<Gc> for MemoryStore {
     fn handle(&mut self, _message: Gc, cx: Context<Self, Gc>) {
         self.sessions = self
             .sessions
+            .drain()
+            .filter(|(_, ref entry)| entry.is_alive())
+            .collect();
+        self.auth_codes = self
+            .auth_codes
             .drain()
             .filter(|(_, ref entry)| entry.is_alive())
             .collect();
@@ -169,6 +181,26 @@ impl Handler<DeleteSession> for MemoryStore {
     fn handle(&mut self, message: DeleteSession, cx: Context<Self, DeleteSession>) {
         self.sessions.remove(&message.session_id);
         cx.reply(Ok(()))
+    }
+}
+
+impl Handler<SaveAuthCode> for MemoryStore {
+    fn handle(&mut self, message: SaveAuthCode, cx: Context<Self, SaveAuthCode>) {
+        self.auth_codes.insert(
+            message.code,
+            Expiring::from_duration(message.data, self.expire_auth_codes),
+        );
+        cx.reply(Ok(()))
+    }
+}
+
+impl Handler<ConsumeAuthCode> for MemoryStore {
+    fn handle(&mut self, message: ConsumeAuthCode, cx: Context<Self, ConsumeAuthCode>) {
+        cx.reply(Ok(self
+            .auth_codes
+            .remove(&message.code)
+            .filter(Expiring::is_alive)
+            .map(|entry| entry.value)))
     }
 }
 

@@ -203,7 +203,7 @@ pub async fn auth(ctx: &mut Context, email_addr: &EmailAddress, link: &Link) -> 
         return Err(BrokerError::ProviderCancelled);
     }
 
-    if ctx.want_json() {
+    if ctx.want_json {
         Ok(json_response(
             &json!({
                 "result": "redirect_to_provider",
